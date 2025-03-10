@@ -160,7 +160,7 @@ def chat():
         if len(history) == 0 and user_input.lower() in ['hi', 'hello', 'hey', 'start']:
             welcome_message = (
                 "STEP 1: HAVE CLEAR GOALS\n\n"
-                "Hi there! What goal would you like to focus on today? "
+                " Hi there! What goal would you like to focus on today? "
                 "Think about something meaningful you're working toward. The more specific you can be, the better we can work together.\n\n"
                 "CURRENT STEP: 1 - HAVE CLEAR GOALS"
             )
