@@ -71,10 +71,10 @@ steps = [
     {"number": 5, "name": "Push Through to Completion", "description": "Establish execution habits and accountability"}
 ]
 
-def truncate_history(history, max_messages=10):
-    """Truncate conversation history to avoid token limits"""
+def truncate_history(history, max_messages=50):
+    """Truncate conversation history if needed, but with a higher limit"""
     if len(history) > max_messages:
-        # Keep the most recent messages
+        # Keep the most recent messages, with a much larger context window
         return history[-max_messages:]
     return history
 
@@ -160,14 +160,7 @@ def chat():
         if len(history) == 0 and user_input.lower() in ['hi', 'hello', 'hey', 'start']:
             welcome_message = (
                 "STEP 1: HAVE CLEAR GOALS\n\n"
-                "Hi there! I'm excited to guide you through a powerful process that's helped countless people achieve their goals. "
-                "We'll be using Ray Dalio's proven 5-step method:\n\n"
-                "1. Have Clear Goals\n"
-                "2. Identify and Don't Tolerate Problems\n"
-                "3. Diagnose Problems to Get at Their Root Causes\n"
-                "4. Design a Plan\n"
-                "5. Push Through to Completion\n\n"
-                "Let's start with step 1: What goal would you like to focus on today? "
+                "Hi there! What goal would you like to focus on today? "
                 "Think about something meaningful you're working toward. The more specific you can be, the better we can work together.\n\n"
                 "CURRENT STEP: 1 - HAVE CLEAR GOALS"
             )

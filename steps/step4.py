@@ -77,13 +77,13 @@ once we have a specific actionable plan include the text 'STEP_COMPLETE' in your
     # Add current user input
     messages.append({"role": "user", "content": user_input})
 
-    # Limit the number of messages to avoid token limit issues
-    if len(messages) > 10:
-        messages = messages[-10:]  # Keep only the 10 most recent messages
+    # Using a larger message history for more context
+    if len(messages) > 50:
+        messages = messages[-50:]
         
     response = client.messages.create(
         model="claude-3-5-sonnet-20240620",
-        max_tokens=1000,
+        max_tokens=4000,
         system=system_content,
         messages=messages
     ).content[0].text

@@ -20,12 +20,12 @@ The user's current goal is: {goal if goal else "Not yet defined"}
    - Don't insist on perfection - a workable goal is sufficient
    - Example valid goals: "finish the project by Friday", "improve team communication", "reduce errors by 10%"
 
-2. If the user's input is too vague to be a goal (e.g., "I want to be better"), ask ONE clarifying question:
+2. If the user's input is too vague to be a goal and instead seems like a desire (e.g., "I want to be better"), ask one clarifying question:
    - "Could you make that more specific? For example, what do you want to be better at?"
    - Once they respond with ANY clarification, accept it as their goal
 
 3. If the user provides multiple goals, simply ask them to choose one:
-   - "You've mentioned several goals. Which one would you like to focus on first?"
+   - "You've mentioned several goals. We want to avoid the pitfall of pursuing too many goals at once and achieving few or none of them. Which one would you like to focus on first?"
    - Accept whatever they choose immediately
 
 4. As soon as you've identified a workable goal:
@@ -48,13 +48,13 @@ The MOMENT you identify a specific, workable goal, confirm it and move on. Don't
     # Add current user input
     messages.append({"role": "user", "content": user_input})
 
-    # Limit the number of messages to avoid token limit issues
-    if len(messages) > 10:
-        messages = messages[-10:]
+    # Using a larger message history for more context
+    if len(messages) > 50:
+        messages = messages[-50:]
         
     response = client.messages.create(
         model="claude-3-5-sonnet-20240620",
-        max_tokens=1000,
+        max_tokens=4000,
         system=system_content,
         messages=messages
     ).content[0].text
