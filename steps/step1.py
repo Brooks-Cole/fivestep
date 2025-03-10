@@ -20,7 +20,7 @@ The user's current goal is: {goal if goal else "Not yet defined"}
    - Don't insist on perfection - a workable goal is sufficient
    - Example valid goals: "finish the project by Friday", "improve team communication", "reduce errors by 10%"
 
-2. If the user's input is too vague to be a goal and instead seems like a desire (e.g., "I want to be better"), ask one clarifying question:
+2. If the user's input is too vague to be a goal and instead seems like a desire (e.g., "I want to be better"), ask clarifying questions:
    - "Could you make that more specific? For example, what do you want to be better at?"
    - Once they respond with ANY clarification, accept it as their goal
 
