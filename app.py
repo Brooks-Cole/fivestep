@@ -410,4 +410,5 @@ if __name__ == '__main__':
     
 # This is needed for Vercel deployment
 # Do not remove - Vercel uses this to import your Flask app
+# Exporting the application for WSGI servers
 application = app
