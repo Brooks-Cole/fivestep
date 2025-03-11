@@ -2,7 +2,15 @@
 Step 1: Have Clear Goals - Fast Version
 """
 from .Program_Wide_Prompt import PROGRAM_WIDE_PROMPT
+import sys
+import os
 
+# Add the parent directory to sys.path to import from root
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils import truncate_history, extract_evaluation, check_step_completion, with_retry
+from config import DEFAULT_MODEL, MAX_TOKENS
+
+@with_retry()
 def handle_step1(user_input, history, goal, client):
     """
     Guides the user through Step 1: Have Clear Goals with faster progression
@@ -15,7 +23,7 @@ The user's current goal is: {goal if goal else "Not yet defined"}
 
 ## Fast Goal Identification Guidelines
 
-1. If the user mentions ANY specific goal that's reasonably clear, IMMEDIATELY confirm it and move to the next step.
+1. If the user mentions a specific goal that's reasonably clear, confirm it and move to the next step.
    - As soon as you see a goal that's specific enough to work with, consider it valid
    - Don't insist on perfection - a workable goal is sufficient
    - Example valid goals: "finish the project by Friday", "improve team communication", "reduce errors by 10%"
@@ -39,74 +47,25 @@ The MOMENT you identify a specific, workable goal, confirm it and move on. Don't
 """
 
     # Prepare the message history for Claude
-    messages = []
-    
-    # Add conversation history
-    if history:
-        messages.extend(history)
+    messages = truncate_history(history) if history else []
     
     # Add current user input
     messages.append({"role": "user", "content": user_input})
-
-    # Using a larger message history for more context
-    if len(messages) > 50:
-        messages = messages[-50:]
         
-    response = client.messages.create(
-        model="claude-3-5-sonnet-20240620",
-        max_tokens=4000,
+    # Make API call with retry logic handled by decorator
+    api_response = client.messages.create(
+        model=DEFAULT_MODEL,
+        max_tokens=MAX_TOKENS,
         system=system_content,
         messages=messages
-    ).content[0].text
-
-    # Extract evaluation summary if it exists
-    evaluation_summary = ""
-    if "<evaluation>" in response and "</evaluation>" in response:
-        evaluation_start = response.find("<evaluation>") + len("<evaluation>")
-        evaluation_end = response.find("</evaluation>")
-        evaluation_summary = response[evaluation_start:evaluation_end].strip()
-
-        # Remove the evaluation tags and content from the main response
-        response = response[:response.find("<evaluation>")] + response[response.find("</evaluation>") + len("</evaluation>"):]
+    )
     
-    # Check for goal confirmation markers - expanded to catch more variations
-    is_complete = ("STEP_COMPLETE" in response or 
-                   "Goal confirmed" in response or 
-                   "goal is confirmed" in response or
-                   "confirmed your goal" in response)
+    response = api_response.content[0].text
+
+    # Extract evaluation summary and clean response
+    response, evaluation_summary = extract_evaluation(response)
+    
+    # Check for step completion markers
+    is_complete = check_step_completion(response)
                    
     return response, is_complete, evaluation_summary
-
-
-def extract_goal(response):
-    """
-    Extract the confirmed goal from the response text
-    Modified to be more flexible in extracting goals
-    """
-    import re
-    
-    # Try several patterns to extract the goal
-    patterns = [
-        r'Goal confirmed: (.+?)[\.|\!]',
-        r'goal is: (.+?)[\.|\!]',
-        r'focusing on (.+?)[\.|\!]',
-        r'aiming to (.+?)[\.|\!]'
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, response)
-        if match:
-            return match.group(1).strip()
-    
-    # Fallback method if patterns don't match
-    if "Goal confirmed" in response:
-        parts = response.split("Goal confirmed:")
-        if len(parts) > 1:
-            goal_part = parts[1].strip()
-            # Extract until the end of sentence or first period
-            end_index = goal_part.find('.')
-            if end_index != -1:
-                return goal_part[:end_index].strip()
-            return goal_part.strip()
-    
-    return None  # Unable to extract goal

@@ -4,12 +4,53 @@
     <meta charset="UTF-8">
     <title>5-Step Process Coach</title>
     <style>
+        :root {
+            /* Athena Theme (Rational) */
+            --athena-primary: #8eaee0;
+            --athena-secondary: #d8e1f3;
+            --athena-accent: #5d7cae;
+            --athena-border: #c0d6e4;
+            --athena-background: linear-gradient(135deg, #f5f7fa, #e4e9f0);
+            
+            /* Dionysus Theme (Emotional) */
+            --dionysus-primary: #e08e8e;
+            --dionysus-secondary: #f3d8d8;
+            --dionysus-accent: #ae5d5d;
+            --dionysus-border: #e4c0c0;
+            --dionysus-background: linear-gradient(135deg, #faf5f5, #f0e4e4);
+            
+            /* Sentiment-based colors */
+            --rational-color: rgb(102, 178, 255); /* Blue */
+            --emotional-color: rgb(255, 102, 102); /* Red */
+            --neutral-color: rgb(200, 200, 200); /* Gray */
+            --sentiment-color: var(--neutral-color);
+            --sentiment-color-end: rgb(180, 180, 180);
+            
+            /* Active theme will be set via JS */
+            --theme-primary: var(--athena-primary);
+            --theme-secondary: var(--athena-secondary);
+            --theme-accent: var(--athena-accent);
+            --theme-border: var(--athena-border);
+            --theme-background: var(--athena-background);
+
+            /* Base theme */
+            --background: linear-gradient(135deg, var(--sentiment-color), var(--sentiment-color-end));
+            --text-color: #333;
+            --input-bg: rgba(255, 255, 255, 0.9);
+            --button-bg: var(--theme-accent);
+            --button-hover: var(--theme-primary);
+            --sentiment-indicator: var(--theme-accent);
+        }
+
         body {
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 20px;
-            background-color: #f5f5f5;
+            background: var(--background);
             line-height: 1.5;
+            transition: background 0.5s ease;
+            /* Added transition for sentiment-based background changes */
+            transition: background 0.5s ease, background-color 0.5s ease;
         }
         
         #container {
@@ -38,18 +79,33 @@
             border: 1px solid #ddd;
             border-radius: 5px;
             padding: 15px;
-            height: 500px;
+            height: 450px;
             overflow-y: scroll;
         }
         
-        #thought-window {
+        #right-panels {
             flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        #thought-window {
             background-color: white;
             border: 1px solid #ddd;
             border-radius: 5px;
             padding: 15px;
-            height: 500px;
+            height: 300px;
             overflow-y: auto;
+        }
+        
+        /* Added: Sentiment Panel */
+        #sentiment-panel {
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            height: auto;
         }
         
         .message {
@@ -57,6 +113,7 @@
             padding: 10px;
             border-radius: 5px;
             max-width: 85%;
+            position: relative;
         }
         
         .user {
@@ -69,6 +126,16 @@
             background-color: #f1f1f1;
             margin-left: 0;
             margin-right: auto;
+        }
+        
+        /* Added: Sentiment indicator for messages */
+        .sentiment-indicator {
+            position: absolute;
+            top: 0;
+            left: -8px;
+            width: 5px;
+            height: 100%;
+            border-radius: 3px 0 0 3px;
         }
         
         .previous-evaluation {
@@ -235,6 +302,58 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+
+        /* Added: Sentiment meter */
+        .meter-container {
+            position: relative;
+            height: 24px;
+            background: #f0f0f0;
+            border-radius: 12px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .meter-marker {
+            position: absolute;
+            top: 0;
+            left: 50%; /* Center position (neutral) */
+            height: 100%;
+            width: 4px;
+            background: #000;
+            transform: translateX(-50%);
+            transition: left 0.5s ease;
+        }
+
+        .meter-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+        
+        /* Bot name styling */
+        .bot-name {
+            color: var(--theme-accent);
+            font-weight: 600;
+        }
+        
+        /* Avatar styling */
+        .avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            margin-right: 10px;
+            vertical-align: middle;
+            object-fit: cover;
+        }
+        
+        /* Message with avatar layout */
+        .message-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
     </style>
 </head>
 <body>
@@ -246,7 +365,6 @@
                 <h3>Completed Steps</h3>
                 <div id="steps-content">
                     <p>No steps completed yet. Let's get started!</p>
-                    <!-- Add this button just before the closing </div> in the "completed-steps" section -->
                     <button id="generate-email" onclick="generateEmailSummary()" style="display: none; background-color: #fbbc04; margin-top: 10px;">
                         Generate Email Summary
                     </button>
@@ -254,10 +372,20 @@
             </div>
             <div id="chat-history"></div>
         </div>
-        <div id="thought-window">
-            <h3>Evaluations</h3>
-            <div id="evaluation-content">Awaiting response...</div>
-            <div id="previous-evaluations"></div>
+        <div id="right-panels">
+            <div id="thought-window">
+                <h3>Evaluations</h3>
+                <div id="evaluation-content">Awaiting response...</div>
+                <div id="previous-evaluations"></div>
+            </div>
+            
+            <!-- Sentiment panel (hidden) -->
+            <div id="sentiment-panel" style="display: none;">
+                <div class="meter-container">
+                    <div class="meter-marker" id="sentiment-marker"></div>
+                </div>
+                <p id="sentiment-description" style="display: none;"></p>
+            </div>
         </div>
     </div>
     
@@ -281,6 +409,8 @@
     <script>
         let conversationHistory = [];
         let isProcessing = false;
+        let lastSentimentScore = 0;
+        let lastSentimentEma = 0;
 
         // Add event listener for Enter key
         document.getElementById('user-input').addEventListener('keypress', function(e) {
@@ -288,6 +418,201 @@
                 sendMessage();
             }
         });
+
+        // Function to get color based on sentiment value
+        function getColorForSentiment(score) {
+            // Normalize score to 0-1 range for interpolation
+            const normalizedScore = (score + 10) / 20;
+            
+            // Color definitions: emotional (red) to neutral (gray) to rational (blue)
+            const emotional = [255, 102, 102]; // Red
+            const neutral = [200, 200, 200];   // Gray
+            const rational = [102, 178, 255];  // Blue
+            
+            let color;
+            if (normalizedScore <= 0.5) {
+                // Between emotional and neutral
+                const factor = normalizedScore * 2; // Scale to 0-1 range
+                color = emotional.map((c, i) => Math.round(c * (1 - factor) + neutral[i] * factor));
+            } else {
+                // Between neutral and rational
+                const factor = (normalizedScore - 0.5) * 2; // Scale to 0-1 range
+                color = neutral.map((c, i) => Math.round(c * (1 - factor) + rational[i] * factor));
+            }
+            
+            return `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+        }
+        
+        // Function to handle API response and update UI with sentiment data
+        function handleSuccessResponse(data) {
+            if (!data.sentiment_ema && data.sentiment_ema !== 0) return;
+            
+            const sentimentEma = data.sentiment_ema;
+            let color;
+            
+            // Update the lastSentimentEma value
+            lastSentimentEma = sentimentEma;
+            
+            if (sentimentEma > 0) {
+                // Between neutral and rational (blue)
+                const t = Math.min(sentimentEma / 10, 1); // Normalize to 0-1
+                const neutralRgb = [200, 200, 200];
+                const rationalRgb = [102, 178, 255];
+                color = neutralRgb.map((c, i) => Math.round(c * (1 - t) + rationalRgb[i] * t));
+            } else if (sentimentEma < 0) {
+                // Between neutral and emotional (red)
+                const t = Math.min(Math.abs(sentimentEma) / 10, 1); // Normalize to 0-1
+                const neutralRgb = [200, 200, 200];
+                const emotionalRgb = [255, 102, 102];
+                color = neutralRgb.map((c, i) => Math.round(c * (1 - t) + emotionalRgb[i] * t));
+            } else {
+                // Neutral (gray)
+                color = [200, 200, 200];
+            }
+            
+            // Create slightly darker version for gradient end
+            const color2 = color.map(c => Math.round(c * 0.9));
+            
+            // Update CSS variables
+            document.documentElement.style.setProperty('--sentiment-color', `rgb(${color[0]}, ${color[1]}, ${color[2]})`);
+            document.documentElement.style.setProperty('--sentiment-color-end', `rgb(${color2[0]}, ${color2[1]}, ${color2[2]})`);
+            
+            // Update background gradient
+            updateBackgroundGradient();
+        }
+
+        // Get a blended bot name based on sentiment score
+        function getBlendedBotName(score) {
+            // Map the sentiment score (-10 to +10) to a range of bot personas
+            if (score <= -8) return "Dionysus";
+            if (score <= -5) return "Dionysia";
+            if (score <= -2) return "Diothena";
+            if (score <= 2) return "Athionysus";
+            if (score <= 5) return "Athenaia";
+            if (score <= 8) return "Atheneus";
+            return "Athena";
+        }
+
+        // Get avatar URL based on sentiment score
+        function getAvatarUrl(score) {
+            // Placeholder URLs - replace with actual image paths
+            if (score <= -6) return "/static/avatars/dionysus.png";
+            if (score <= -2) return "/static/avatars/diothena.png";
+            if (score <= 2) return "/static/avatars/balanced.png";
+            if (score <= 6) return "/static/avatars/athenaia.png";
+            return "/static/avatars/athena.png";
+        }
+        
+        // Function to switch themes based on sentiment
+        function switchTheme(sentimentEma) {
+            const isRational = sentimentEma >= 0;
+            const themePrefix = isRational ? 'athena' : 'dionysus';
+            
+            // Update lastSentimentEma for the gradient calculation
+            lastSentimentEma = sentimentEma;
+            
+            // Get blended bot name based on sentiment score
+            const botName = getBlendedBotName(sentimentEma);
+            
+            // Update bot name in UI
+            document.querySelectorAll('.bot-name').forEach(el => {
+                el.textContent = botName;
+            });
+            
+            // Update theme variables - gradient between themes based on score intensity
+            const blendFactor = Math.min(Math.abs(sentimentEma) / 10, 1); // 0 to 1
+            
+            document.documentElement.style.setProperty('--theme-primary', `var(--${themePrefix}-primary)`);
+            document.documentElement.style.setProperty('--theme-secondary', `var(--${themePrefix}-secondary)`);
+            document.documentElement.style.setProperty('--theme-accent', `var(--${themePrefix}-accent)`);
+            document.documentElement.style.setProperty('--theme-border', `var(--${themePrefix}-border)`);
+            document.documentElement.style.setProperty('--theme-background', `var(--${themePrefix}-background)`);
+            
+            // Update background with sentiment-based gradient
+            updateBackgroundGradient();
+            
+            return botName;
+        }
+        
+        // Function to update background based on theme and sentiment
+        function updateBackgroundGradient() {
+            // Check if we're using sentiment-based gradient
+            if (lastSentimentEma !== undefined) {
+                // Generate colors based on sentiment EMA
+                let color1, color2;
+                
+                // Normalize sentiment EMA to a range between -1 and 1
+                const normalizedEma = Math.max(Math.min(lastSentimentEma / 10, 1), -1);
+                
+                if (normalizedEma > 0) {
+                    // Between neutral and rational (blue)
+                    const factor = normalizedEma;
+                    const neutralRgb = [200, 200, 200];
+                    const rationalRgb = [102, 178, 255];
+                    color1 = neutralRgb.map((c, i) => Math.round(c * (1 - factor) + rationalRgb[i] * factor));
+                    color2 = color1.map(c => Math.round(c * 0.9)); // Slightly darker for gradient
+                } else if (normalizedEma < 0) {
+                    // Between neutral and emotional (red)
+                    const factor = Math.abs(normalizedEma);
+                    const neutralRgb = [200, 200, 200];
+                    const emotionalRgb = [255, 102, 102];
+                    color1 = neutralRgb.map((c, i) => Math.round(c * (1 - factor) + emotionalRgb[i] * factor));
+                    color2 = color1.map(c => Math.round(c * 0.9)); // Slightly darker for gradient
+                } else {
+                    // Neutral (gray)
+                    color1 = [200, 200, 200];
+                    color2 = [180, 180, 180];
+                }
+                
+                // Update CSS variables with calculated colors
+                document.documentElement.style.setProperty('--sentiment-color', `rgb(${color1[0]}, ${color1[1]}, ${color1[2]})`);
+                document.documentElement.style.setProperty('--sentiment-color-end', `rgb(${color2[0]}, ${color2[1]}, ${color2[2]})`);
+                
+                // Apply sentiment-based gradient
+                document.body.style.background = `linear-gradient(135deg, rgb(${color1[0]}, ${color1[1]}, ${color1[2]}), rgb(${color2[0]}, ${color2[1]}, ${color2[2]}))`;
+            } else {
+                // Use the theme-based background as fallback
+                document.body.style.background = 'var(--theme-background)';
+            }
+        }
+
+        // Legacy function for backward compatibility
+        function updateBackgroundColor(sentimentEma) {
+            // Use the new theme switcher instead
+            switchTheme(sentimentEma);
+        }
+
+        // Update sentiment meter position and color
+        function updateSentimentMeter(score) {
+            const marker = document.getElementById('sentiment-marker');
+            // Convert score from -10 to +10 range to 0% to 100% position
+            const position = ((score + 10) / 20) * 100;
+            marker.style.left = `${position}%`;
+            
+            // Update color of the marker
+            marker.style.background = getColorForSentiment(score);
+            
+            // Update description based on sentiment score
+            updateSentimentDescription(score);
+        }
+
+        // Update sentiment description text based on bot personality
+        function updateSentimentDescription(score) {
+            const description = document.getElementById('sentiment-description');
+            const botName = getBlendedBotName(score);
+            
+            if (score < -7) {
+                description.innerHTML = `<strong>${botName}</strong> reflects your highly emotional communication style. She draws out creative and passionate expression.`;
+            } else if (score < -3) {
+                description.innerHTML = `<strong>${botName}</strong> responds to your emotional communication style with intuitive, creative guidance.`;
+            } else if (score < 3) {
+                description.innerHTML = `<strong>${botName}</strong> balances emotional and rational approaches in response to your communication style.`;
+            } else if (score < 7) {
+                description.innerHTML = `<strong>${botName}</strong> provides orderly, logical guidance that matches your rational communication style.`;
+            } else {
+                description.innerHTML = `<strong>${botName}</strong> offers highly structured, analytical responses to complement your rational approach.`;
+            }
+        }
 
         function sendMessage() {
             const userInput = document.getElementById('user-input').value;
@@ -305,7 +630,13 @@
             fetch('/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_input: userInput })
+                body: JSON.stringify({ 
+                    user_input: userInput,
+                    sentiment_info: {
+                        score: lastSentimentScore,
+                        ema: lastSentimentEma
+                    }
+                })
             })
             .then(response => {
                 if (!response.ok) {
@@ -316,7 +647,25 @@
             .then(data => {
                 const botResponse = data.main_response;
                 conversationHistory.push({ role: 'assistant', content: botResponse });
+                
+                // Update sentiment data
+                lastSentimentScore = data.sentiment_score || 0;
+                lastSentimentEma = data.sentiment_ema || 0;
+                
+                // Get the bot name from API response or determine it from sentiment
+                const botName = data.bot_name || (lastSentimentEma >= 0 ? 'Athena' : 'Dionysus');
+                
+                // Update theme based on sentiment
+                switchTheme(lastSentimentEma);
+                
+                // Update sentiment visualization
+                updateSentimentMeter(lastSentimentEma);
+                
+                // Add sentiment indicator to last message
                 updateChatDisplay();
+                
+                // Handle sentiment EMA based background color gradient
+                handleSuccessResponse(data);
 
                 // Update completed steps
                 const completedSteps = data.completed_steps;
@@ -327,10 +676,19 @@
                     completedSteps.forEach(step => {
                         const stepDiv = document.createElement('div');
                         stepDiv.className = 'step-item';
-                        stepDiv.innerHTML = `
-                            <span>Step ${step.step}: ${step.name} ${step.goal ? '- ' + step.goal : ''}</span>
-                            <button class="step-button" onclick="revisitStep(${step.step})">Revisit</button>
-                        `;
+                        
+                        // Special handling for step 1 to show just the goal
+                        if (step.is_step_one) {
+                            stepDiv.innerHTML = `
+                                <span>Step ${step.step}: ${step.name} ${step.goal ? '- ' + step.goal : ''}</span>
+                                <button class="step-button" onclick="revisitStep(${step.step})">Revisit</button>
+                            `;
+                        } else {
+                            stepDiv.innerHTML = `
+                                <span>Step ${step.step}: ${step.name} ${step.goal ? '- ' + step.goal : ''}</span>
+                                <button class="step-button" onclick="revisitStep(${step.step})">Revisit</button>
+                            `;
+                        }
                         completedStepsDiv.appendChild(stepDiv);
                     });
                     
@@ -378,10 +736,42 @@
             const chatHistory = document.getElementById('chat-history');
             chatHistory.innerHTML = '';
             
-            conversationHistory.forEach(msg => {
+            conversationHistory.forEach((msg, index) => {
                 const messageDiv = document.createElement('div');
-                messageDiv.className = `message ${msg.role}`;
-                messageDiv.innerHTML = `<strong>${msg.role === 'user' ? 'You' : 'Coach'}:</strong> ${msg.content}`;
+                messageDiv.className = `message ${msg.role === 'user' ? 'user' : 'assistant'}`;
+                
+                // Add sentiment indicator for user messages if it's not the first message
+                if (msg.role === 'user' && index > 0) {
+                    const indicatorDiv = document.createElement('div');
+                    indicatorDiv.className = 'sentiment-indicator';
+                    
+                    // Set color - use most recent score for latest message
+                    if (index === conversationHistory.length - 1 && msg.role === 'user') {
+                        indicatorDiv.style.background = getColorForSentiment(lastSentimentScore);
+                    } else {
+                        // For older messages, use a neutral color
+                        indicatorDiv.style.background = '#888888';
+                    }
+                    
+                    messageDiv.appendChild(indicatorDiv);
+                }
+                
+                // Get the bot name and avatar based on current sentiment
+                const botName = getBlendedBotName(lastSentimentEma);
+                const avatarUrl = getAvatarUrl(lastSentimentEma);
+                
+                if (msg.role === 'user') {
+                    messageDiv.innerHTML += `<strong>You:</strong> ${msg.content}`;
+                } else {
+                    // Create message header with avatar and name
+                    messageDiv.innerHTML += `
+                        <div class="message-header">
+                            <img src="${avatarUrl}" alt="${botName}" class="avatar" onerror="this.src='/static/avatars/default.png'">
+                            <strong><span class="bot-name">${botName}</span>:</strong>
+                        </div>
+                        ${msg.content}
+                    `; 
+                }
                 chatHistory.appendChild(messageDiv);
             });
             
@@ -406,6 +796,12 @@
             .then(data => {
                 if (data.status === 'success') {
                     alert(`Returned to Step ${step}`);
+                    // Update sentiment if available
+                    if (data.sentiment_ema !== undefined) {
+                        lastSentimentEma = data.sentiment_ema;
+                        updateSentimentMeter(lastSentimentEma);
+                        updateBackgroundColor(lastSentimentEma);
+                    }
                 } else {
                     alert('Cannot revisit step: ' + data.message);
                 }
@@ -441,6 +837,14 @@
                         document.getElementById('previous-evaluations').innerHTML = '';
                         const emailButton = document.getElementById('generate-email');
                         if (emailButton) emailButton.style.display = 'none';
+                        
+                        // Reset sentiment
+                        lastSentimentScore = 0;
+                        lastSentimentEma = 0;
+                        updateSentimentMeter(0);
+                        updateBackgroundColor(0);
+                        handleSuccessResponse({sentiment_ema: 0});
+                        
                         alert('Conversation has been reset');
                     }
                 })
@@ -517,6 +921,33 @@
                 modal.style.display = 'none';
             }
         }
+
+        // Initialize sentiment meter on page load
+        window.onload = async function() {
+            try {
+                const response = await fetch('/progress');
+                if (!response.ok) throw new Error('Network response was not ok');
+                const data = await response.json();
+                
+                // Initialize sentiment from server if available
+                if (data.sentiment_ema !== undefined) {
+                    lastSentimentEma = data.sentiment_ema;
+                    updateSentimentMeter(lastSentimentEma);
+                    // Update both theme colors and sentiment-based background
+                    updateBackgroundColor(lastSentimentEma);
+                    handleSuccessResponse({sentiment_ema: lastSentimentEma});
+                } else {
+                    // Set default neutral colors if no sentiment data
+                    handleSuccessResponse({sentiment_ema: 0});
+                }
+                
+                // Make the sentiment panel visible
+                document.getElementById('sentiment-panel').style.display = 'block';
+                document.getElementById('sentiment-description').style.display = 'block';
+            } catch (error) {
+                console.error('Error initializing sentiment:', error);
+            }
+        };
     </script>
 </body>
 </html>

@@ -9,30 +9,25 @@ from steps.step5 import handle_step5
 import re
 import os
 import json
-from datetime import timedelta
+import logging
+from config import (SESSION_CONFIG, STEPS, ANTHROPIC_API_KEY, 
+                   STEP_COMPLETE_MARKER)
+from utils import truncate_history, extract_goal, remove_step_headers, with_retry
 
-# Environment variables for configuration
-try:
-    from dotenv import load_dotenv
-    load_dotenv()  # Load environment variables from .env file
-    print("Environment variables loaded from .env file")
-except ImportError:
-    print("dotenv package not available, using default environment variables")
-except Exception as e:
-    print(f"Error loading environment variables: {str(e)}")
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 def configure_sessions(app):
     """
     Configure sessions for Vercel deployment - serverless environment requires simpler session handling
     """
-    # For serverless, we use simpler cookie-based sessions with a secret key
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'YCTk4viYiohqPmqQUg85hRezAVUdW47qWsuONrntUAY')
-    # These settings help with cookie size in serverless environments
-    app.config['SESSION_PERMANENT'] = True
-    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
-    app.config['SESSION_COOKIE_SECURE'] = True
-    app.config['SESSION_COOKIE_HTTPONLY'] = True
-    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    # Apply all session configuration from config file
+    for key, value in SESSION_CONFIG.items():
+        app.config[key] = value
     
     return app
 
@@ -41,17 +36,12 @@ app = configure_sessions(app)  # Configure sessions
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for static files
 CORS(app)
 
-# Get API key from environment variable
-ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
-if not ANTHROPIC_API_KEY:
-    print("WARNING: ANTHROPIC_API_KEY environment variable is not set. API calls will fail.")
-    ANTHROPIC_API_KEY = "MISSING_API_KEY"  # This will cause a clear error if API is called
-
 try:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    print("Successfully initialized Anthropic client")
+    logger.info("Successfully initialized Anthropic client")
 except Exception as e:
-    print(f"Error initializing Anthropic client: {str(e)}")
+    logger.error(f"Error initializing Anthropic client: {str(e)}")
+    raise RuntimeError(f"Failed to initialize Anthropic client: {str(e)}")
 
 # Map step numbers to their functions
 step_functions = {
@@ -62,21 +52,56 @@ step_functions = {
     5: handle_step5
 }
 
-# Step names for display
-steps = [
-    {"number": 1, "name": "Have Clear Goals", "description": "Define a specific, measurable goal"},
-    {"number": 2, "name": "Identify Problems", "description": "Identify obstacles preventing goal achievement"},
-    {"number": 3, "name": "Diagnose Root Causes", "description": "Find the underlying reasons for problems"},
-    {"number": 4, "name": "Design a Plan", "description": "Create an actionable plan to address root causes"},
-    {"number": 5, "name": "Push Through to Completion", "description": "Establish execution habits and accountability"}
-]
+# Use steps from config
+steps = STEPS
 
-def truncate_history(history, max_messages=50):
-    """Truncate conversation history if needed, but with a higher limit"""
-    if len(history) > max_messages:
-        # Keep the most recent messages, with a much larger context window
-        return history[-max_messages:]
-    return history
+# New: Function to analyze rationality vs emotionality using Claude
+def analyze_response_sentiment(user_input, client):
+    """
+    Analyzes whether a user response is more rational or emotional
+    Returns a score from -10 (highly emotional) to +10 (highly rational)
+    """
+    system_content = """
+    Analyze the following text and rate it on a rationality vs emotionality scale from -10 to +10:
+    - -10 to -7: Highly emotional (dominated by feelings, passions, subjective experiences)
+    - -6 to -3: Moderately emotional (contains emotional language but with some reasoning)
+    - -2 to +2: Balanced (contains both emotional and rational elements in equilibrium)
+    - +3 to +6: Moderately rational (logical with some emotional components)
+    - +7 to +10: Highly rational (dominated by logic, evidence, structured reasoning)
+    
+    Provide ONLY a single number score between -10 and +10 without any explanation.
+    """
+    
+    try:
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20240620",
+            max_tokens=10,
+            system=system_content,
+            messages=[{"role": "user", "content": user_input}]
+        )
+        score_text = response.content[0].text.strip()
+        
+        # Extract numeric score, handling potential formatting issues
+        score = None
+        try:
+            # Try direct conversion first
+            score = int(score_text)
+        except ValueError:
+            # If that fails, search for a number pattern
+            import re
+            number_pattern = r'-?\d+'
+            match = re.search(number_pattern, score_text)
+            if match:
+                score = int(match.group(0))
+        
+        # Ensure score is within bounds
+        if score is not None:
+            return max(min(score, 10), -10)
+        else:
+            return 0  # Default to neutral if parsing fails
+    except Exception as e:
+        logger.error(f"Error analyzing sentiment: {str(e)}")
+        return 0  # Default to neutral on error
 
 def generate_email_summary(session_data):
     """
@@ -134,26 +159,117 @@ Regards,
 """
     return email_content
 
+class SessionState:
+    """Class to manage session state more robustly instead of using magic strings"""
+    
+    def __init__(self, session_obj):
+        self.session = session_obj
+        self._initialize_if_needed()
+    
+    def _initialize_if_needed(self):
+        """Initialize session if needed"""
+        if 'current_step' not in self.session:
+            logger.info("Initializing new session")
+            self.session['current_step'] = 1
+            self.session['completed_steps'] = []
+            self.session['history'] = []
+            self.session['goal'] = None
+            self.session['step_evaluations'] = {}
+            # New: Initialize sentiment EMA with 0 (neutral)
+            self.session['sentiment_ema'] = 0
+    
+    @property
+    def current_step(self):
+        return self.session.get('current_step', 1)
+    
+    @current_step.setter
+    def current_step(self, value):
+        self.session['current_step'] = value
+    
+    @property
+    def completed_steps(self):
+        return self.session.get('completed_steps', [])
+    
+    def add_completed_step(self, step):
+        if step not in self.completed_steps:
+            completed = self.completed_steps.copy()
+            completed.append(step)
+            self.session['completed_steps'] = completed
+    
+    @property
+    def history(self):
+        return self.session.get('history', [])
+    
+    @history.setter
+    def history(self, value):
+        # Apply compression before storing to reduce cookie size
+        self.session['history'] = truncate_history(value)
+    
+    def add_message(self, role, content):
+        history = self.history.copy()
+        history.append({'role': role, 'content': content})
+        
+        # Ensure we never exceed our cookie size limit by aggressive truncation if needed
+        if len(str(history)) > 3500:  # Leave some margin for other session data
+            logger.warning("History size exceeding safe limit, performing aggressive truncation")
+            # Keep only last 5 messages to prevent cookie overflow
+            history = history[-5:]
+            
+        self.history = history
+    
+    @property
+    def goal(self):
+        return self.session.get('goal')
+    
+    @goal.setter
+    def goal(self, value):
+        self.session['goal'] = value
+    
+    @property
+    def step_evaluations(self):
+        return self.session.get('step_evaluations', {})
+    
+    def add_evaluation(self, step, evaluation):
+        evaluations = self.step_evaluations.copy()
+        evaluations[str(step)] = evaluation
+        self.session['step_evaluations'] = evaluations
+    
+    # New: Properties for sentiment tracking
+    @property
+    def sentiment_ema(self):
+        return self.session.get('sentiment_ema', 0)
+    
+    @sentiment_ema.setter
+    def sentiment_ema(self, value):
+        self.session['sentiment_ema'] = value
+    
+    def reset(self):
+        """Reset session state"""
+        self.session.clear()
+        if self.session.get('_flashes'):
+            del self.session['_flashes']
+        self._initialize_if_needed()
+
+
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
-        # Initialize session if not already set
-        if 'current_step' not in session:
-            print("Initializing new session")
-            session['current_step'] = 1
-            session['completed_steps'] = []
-            session['history'] = []
-            session['goal'] = None
-            session['step_evaluations'] = {}
-
+        # Use our new SessionState class to manage state
+        state = SessionState(session)
+        
         data = request.get_json()
         user_input = data.get('user_input', '')
         
+        # New: Calculate sentiment score using Claude and update EMA
+        sentiment_score = analyze_response_sentiment(user_input, client)
+        alpha = 0.3  # Smoothing factor for EMA
+        new_ema = alpha * sentiment_score + (1 - alpha) * state.sentiment_ema
+        state.sentiment_ema = new_ema
+        
         # Get and truncate history to manage token count
-        history = truncate_history(session.get('history', []))
-        goal = session.get('goal')
-
-        current_step = session['current_step']
+        history = truncate_history(state.history)
+        goal = state.goal
+        current_step = state.current_step
         step_function = step_functions[current_step]
         
         # Handle special case for first message - we'll auto-generate a welcome message
@@ -166,9 +282,8 @@ def chat():
             )
             
             # Update conversation history with full message including markers (for system use)
-            history.append({'role': 'user', 'content': user_input})
-            history.append({'role': 'assistant', 'content': welcome_message})
-            session['history'] = history
+            state.add_message('user', user_input)
+            state.add_message('assistant', welcome_message)
             
             # Clean welcome message for user display
             cleaned_welcome = remove_step_headers(welcome_message)
@@ -178,32 +293,40 @@ def chat():
                 'evaluation_summary': '',
                 'completed_steps': [],
                 'current_step': 1,
-                'step_info': get_step_info(1)
+                'step_info': get_step_info(1),
+                # Include sentiment data for UI theming only
+                'sentiment_score': sentiment_score,
+                'sentiment_ema': state.sentiment_ema,
+                # Bot name will be generated in the frontend
             })
         
-        # Normal flow for all other messages
+        # Normal flow for all other messages - with retry
+        # Do NOT modify the step function calls or pass sentiment info to them
         main_response, is_complete, evaluation_summary = step_function(user_input, history, goal, client)
 
-        # Update conversation history with full response including markers (for system use)
-        history.append({'role': 'user', 'content': user_input})
-        history.append({'role': 'assistant', 'content': main_response})
-        session['history'] = history
+        # Update conversation history
+        state.add_message('user', user_input)
+        state.add_message('assistant', main_response)
 
-        # Store evaluation summary for this step if one was provided
+        # Store evaluation summary for this step if provided
         if evaluation_summary:
-            if 'step_evaluations' not in session:
-                session['step_evaluations'] = {}
-            # Store the step as a string key to avoid int/str comparison issues in session serialization
-            session['step_evaluations'][str(current_step)] = evaluation_summary
+            state.add_evaluation(current_step, evaluation_summary)
 
         # Handle step completion
         if is_complete:
-            if current_step not in session['completed_steps']:
-                session['completed_steps'].append(current_step)
+            state.add_completed_step(current_step)
+            
             if current_step == 1:
-                session['goal'] = extract_goal(main_response)
+                # Extract and store goal from step 1 completion
+                extracted_goal = extract_goal(main_response)
+                if extracted_goal:
+                    state.goal = extracted_goal
+                else:
+                    logger.warning("Could not extract goal from step 1 completion")
+            
+            # Move to next step if not on final step
             if current_step < 5:
-                session['current_step'] = current_step + 1
+                state.current_step = current_step + 1
 
         # Prepare data for frontend
         completed_steps = [
@@ -211,47 +334,79 @@ def chat():
                 'step': i, 
                 'name': next((s['name'] for s in steps if s['number'] == i), f"Step {i}"),
                 'description': next((s['description'] for s in steps if s['number'] == i), ""),
-                'goal': session['goal'] if i == 1 else None
+                'goal': state.goal if i == 1 else None,
+                'is_step_one': i == 1
             }
-            for i in session['completed_steps']
+            for i in state.completed_steps
         ]
         
-        # Clean response for user display - remove step headers and STEP_COMPLETE marker
+        # Clean response for user display
         cleaned_response = remove_step_headers(main_response)
-        # Also remove the STEP_COMPLETE marker
-        cleaned_response = cleaned_response.replace("STEP_COMPLETE", "")
-        # Clean up any extra whitespace created by removing markers
-        cleaned_response = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned_response).strip()
 
         return jsonify({
             'main_response': cleaned_response,
             'evaluation_summary': evaluation_summary,
             'completed_steps': completed_steps,
-            'current_step': session['current_step'],
-            'step_info': get_step_info(session['current_step'])
+            'current_step': state.current_step,
+            'step_info': get_step_info(state.current_step),
+            # Include sentiment data for UI theming only
+            'sentiment_score': sentiment_score,
+            'sentiment_ema': state.sentiment_ema,
+            # Bot name will be generated in the frontend
         })
+    except anthropic.APIError as api_err:
+        # Handle API-specific errors
+        logger.error(f"Anthropic API error: {str(api_err)}")
+        error_type = type(api_err).__name__
+        
+        if isinstance(api_err, anthropic.RateLimitError):
+            user_message = "The AI service is currently overloaded. Please try again in a moment."
+        elif isinstance(api_err, anthropic.APITimeoutError):
+            user_message = "The request timed out. Please try again or reset the conversation."
+        elif isinstance(api_err, anthropic.APIConnectionError):
+            user_message = "Could not connect to the AI service. Please check your internet connection."
+        else:
+            user_message = "There was an issue with the AI service. Please try again later."
+            
+        # Get sentiment EMA for bot name
+        sentiment_ema = session.get('sentiment_ema', 0)
+        
+        return jsonify({
+            'main_response': user_message,
+            'evaluation_summary': f"API Error ({error_type}): {str(api_err)}",
+            'completed_steps': session.get('completed_steps', []),
+            'current_step': session.get('current_step', 1),
+            'step_info': get_step_info(session.get('current_step', 1)),
+            'sentiment_score': 0,
+            'sentiment_ema': sentiment_ema
+            # Bot name will be generated in the frontend
+        }), 500
+        
     except Exception as e:
-        # Handle any errors
+        # Handle any other errors
         error_message = f"An error occurred: {str(e)}"
-        print(error_message)  # Log the error
-        import traceback
-        traceback.print_exc()  # Print full traceback for debugging
+        logger.error(error_message, exc_info=True)
         
         # Create a more user-friendly message
         user_error_message = "I encountered an error. Please try again or reset the conversation."
         
-        # Check for common error types
-        if "token" in str(e).lower() or "exceed" in str(e).lower() or "overload" in str(e).lower():
+        # Check for common error patterns
+        error_str = str(e).lower()
+        if "token" in error_str or "exceed" in error_str or "overload" in error_str:
             user_error_message = "The conversation has become too long. Please reset the conversation to continue."
-        elif "api" in str(e).lower() or "anthropic" in str(e).lower() or "key" in str(e).lower():
-            user_error_message = "There was an issue connecting to the AI service. Please check server configuration."
+        
+        # Get sentiment EMA for bot name
+        sentiment_ema = session.get('sentiment_ema', 0)
         
         return jsonify({
             'main_response': user_error_message,
             'evaluation_summary': error_message,
             'completed_steps': session.get('completed_steps', []),
             'current_step': session.get('current_step', 1),
-            'step_info': get_step_info(session.get('current_step', 1))
+            'step_info': get_step_info(session.get('current_step', 1)),
+            'sentiment_score': 0,
+            'sentiment_ema': sentiment_ema
+            # Bot name will be generated in the frontend
         }), 500
 
 def get_step_info(step_number):
@@ -263,69 +418,65 @@ def get_step_info(step_number):
 
 @app.route('/set_step', methods=['POST'])
 def set_step():
+    state = SessionState(session)
     data = request.get_json()
     step = data['step']
     
     # Ensure they can only go to a completed step or the current step
-    if step in session['completed_steps'] or step == session['current_step']:
-        session['current_step'] = step
+    if step in state.completed_steps or step == state.current_step:
+        state.current_step = step
         return jsonify({
             'status': 'success',
             'current_step': step,
-            'step_info': get_step_info(step)
+            'step_info': get_step_info(step),
+            'sentiment_ema': state.sentiment_ema
         })
     return jsonify({'status': 'error', 'message': 'Step not completed yet'}), 403
 
 @app.route('/reset', methods=['POST'])
 def reset_conversation():
-    # Clear all session data
-    session.clear()
-    if session.get('_flashes'):
-        del session['_flashes']
-    # Reinitialize session
-    session['current_step'] = 1
-    session['completed_steps'] = []
-    session['history'] = []
-    session['goal'] = None
-    session['step_evaluations'] = {}
+    # Use SessionState to reset all session data
+    state = SessionState(session)
+    state.reset()
+    
     return jsonify({
         'status': 'success',
         'current_step': 1,
-        'step_info': get_step_info(1)
+        'step_info': get_step_info(1),
+        'sentiment_ema': 0
     })
 
 @app.route('/get_summary', methods=['GET'])
 def get_summary():
     """Endpoint to generate and return an email summary of the process"""
-    # Create a dictionary to store all evaluations by step
-    step_evaluations = {}
-    
-    # Get completed steps and their evaluations
-    if 'step_evaluations' in session:
-        step_evaluations = session['step_evaluations']
+    state = SessionState(session)
     
     # Create summary data
     summary_data = {
-        'goal': session.get('goal', 'Not specified'),
-        'step_evaluations': step_evaluations
+        'goal': state.goal if state.goal else 'Not specified',
+        'step_evaluations': state.step_evaluations
     }
     
     # Generate the email content
     email_content = generate_email_summary(summary_data)
     
     return jsonify({
-        'email_content': email_content
+        'email_content': email_content,
+        'sentiment_ema': state.sentiment_ema
     })
 
 @app.route('/progress', methods=['GET'])
 def get_progress():
     """Returns the current progress through the 5-step process"""
+    state = SessionState(session)
+    
     return jsonify({
-        'current_step': session.get('current_step', 1),
-        'completed_steps': session.get('completed_steps', []),
-        'goal': session.get('goal', None),
-        'step_info': get_step_info(session.get('current_step', 1)),
-        'all_steps': steps
+        'current_step': state.current_step,
+        'completed_steps': state.completed_steps,
+        'goal': state.goal,
+        'step_info': get_step_info(state.current_step),
+        'all_steps': steps,
+        'sentiment_ema': state.sentiment_ema
     })
 
 @app.route('/')
@@ -339,63 +490,59 @@ def serve_frontend():
     
 @app.route('/api/health')
 def health_check():
-    """Simple health check endpoint to verify API is working"""
-    # Collect diagnostic information
+    """Enhanced health check endpoint to verify API and system status"""
     import sys
     import platform
+    import time
+    
+    start_time = time.time()
     
     # Check if we can connect to Anthropic API
-    api_status = "ok"
+    api_status = {
+        "status": "ok",
+        "message": "Connection successful"
+    }
+    
     try:
-        # Just do a simple API check
-        _ = client.models.list()
+        # Do a simple API check with retry logic
+        @with_retry(max_retries=1, delay=1)
+        def test_api_connection():
+            return client.models.list()
+            
+        _ = test_api_connection()
     except Exception as e:
-        api_status = f"error: {str(e)}"
+        error_type = type(e).__name__
+        api_status = {
+            "status": "error",
+            "message": str(e),
+            "error_type": error_type
+        }
+        logger.warning(f"API health check failed: {error_type} - {str(e)}")
+    
+    # Check environment variables are properly set
+    env_status = {
+        "api_key_set": bool(ANTHROPIC_API_KEY),
+        "secret_key_set": bool(SESSION_CONFIG.get('SECRET_KEY')),
+    }
+    
+    # Check session config
+    session_config_summary = {k: "***" if k == "SECRET_KEY" else "set" 
+                            for k, v in SESSION_CONFIG.items() if v}
+    
+    response_time = time.time() - start_time
     
     return jsonify({
-        "status": "ok",
-        "version": "1.0",
+        "status": "ok" if api_status["status"] == "ok" else "degraded",
+        "version": "1.1",
         "environment": os.environ.get('VERCEL_ENV', 'development'),
-        "python_version": sys.version,
+        "python_version": sys.version.split()[0],
         "platform": platform.platform(),
-        "api_status": api_status,
-        "env_vars": {k: "***" for k in os.environ if k.startswith("ANTHROPIC") or k == "SECRET_KEY"}
+        "response_time_ms": round(response_time * 1000, 2),
+        "api": api_status,
+        "environment_variables": env_status,
+        "session_config": session_config_summary,
+        "sentiment_analysis": "enabled"
     })
-
-def remove_step_headers(response):
-    """Remove STEP headers and footers from the response"""
-    # Remove the header (STEP X: TITLE)
-    header_pattern = r'^STEP \d+: [A-Z\s]+'
-    response = re.sub(header_pattern, '', response)
-    
-    # Remove the footer (CURRENT STEP: X - TITLE)
-    footer_pattern = r'CURRENT STEP: \d+ - [A-Z\s]+$'
-    response = re.sub(footer_pattern, '', response)
-    
-    # Trim any extra whitespace
-    return response.strip()
-
-def extract_goal(response):
-    # Look for the specific pattern with "Goal confirmed:" followed by text and ending with period or "Moving"
-    match = re.search(r'Goal confirmed: (.+?)(?:\.|\. Moving)', response)
-    if match:
-        return match.group(1).strip()
-        
-    # Fallback if the exact pattern isn't found
-    if "Goal confirmed:" in response:
-        parts = response.split("Goal confirmed:")
-        if len(parts) > 1:
-            goal_part = parts[1].strip()
-            # Extract until the end of sentence or first period
-            end_index = goal_part.find('.')
-            if end_index != -1:
-                return goal_part[:end_index].strip()
-            # If no period, try finding "Moving to next step"
-            end_index = goal_part.find('Moving to next step')
-            if end_index != -1:
-                return goal_part[:end_index].strip()
-            return goal_part.strip()
-    return None
 
 # The following makes the app work both locally and on Vercel
 if __name__ == '__main__':
